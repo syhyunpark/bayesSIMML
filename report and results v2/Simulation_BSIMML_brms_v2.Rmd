@@ -1,0 +1,211 @@
+--- 
+title: "BAYESIAN INDEX MODELS FOR HETEROGENEOUS TREATMENT EFFECTS"
+date: "<small>`r Sys.Date()`</small>"
+output:
+  html_document:
+    css: Format.css
+    toc: yes
+    toc_depth: 3
+    number_sections: yes
+    toc_float:
+      collapsed: no
+    code_folding: hide
+    theme: cerulean
+  word_document:
+    toc: yes
+    toc_depth: '3'
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+description: some description ...
+---
+
+```{r setup,echo=FALSE}
+require(Hmisc)    # provides knitrSet and other functions
+knitrSet(lang='markdown', fig.path='png/', fig.align='left', w=6.5, h=4.5, cache=TRUE)
+knitrSet(lang='blogdown')
+```
+
+
+
+# Simple linear model using brms
+
+If the interaction term is included in the model, the brms package automatically inserts an intercept and the main effect of the treatment (A) into the fitted Bayesian model.
+
+Thus, the simple linear model with the brms package would be:
+
+$$
+\begin{aligned} 
+logit(P(Y_i=1)) &= \tau + \boldsymbol{X_i}^\top \boldsymbol{m} +(A_i-\bar{A})\beta_0 + (A_i-\bar{A})\boldsymbol{X_i}^\top\boldsymbol{\beta}\\
+\tau &\sim Normal(df=3,\mu=0,\sigma=8)\\
+\boldsymbol{m} &\sim Normal(\boldsymbol\mu=0,\Sigma=\ 5^2 \boldsymbol{I}_{p\times p})\\
+\beta_0 &\sim Normal(\mu=0,\sigma=5)\\ 
+ \boldsymbol{\beta} &\sim Normal(\mu=\boldsymbol{0},\Sigma=5^2 \boldsymbol{I}_{p\times p})\\
+ \end{aligned}
+$$
+
+# Simulation results for all scenarios
+```{r}
+library("collapse")
+library("dplyr")
+library("data.table")
+library("tidyverse")
+library("kableExtra")
+library("table1")
+#load("C:/Users/Danni/OneDrive - NYU Langone Health/Side projects/BayesSIMML/results_testlinearcode/Submit_v2/results/all_24_scenarios_brms.rda")
+load("all_24_scenarios_brms.rda")
+results <- unlist2d(results.aggregated2, idcols = "replicate",DT = TRUE)#the first columns: scenario's id;the second column:simulation's id for each secnario
+pri_scen <- function(x){
+  paste0(x["replicate"],". ","n=",x["n"],","," p=",x["p"],","," g.choice=",x["g.choice"],",",
+         " m.choice=",x["m.choice"])
+}
+
+results$scenario <- apply(results,1,pri_scen)
+kable(results, "html") %>% kable_styling("striped") %>% scroll_box(height = "300px")
+```
+# Summary statistics
+
+- bsim.deviance: deviance from Bayesian single index model (BSIM)
+
+- sng.bayes.deviance: deviance from Bayesian linear model (BLM)
+
+- bsim.accuracy：the proportion of correct decision (PCD) from BSIM
+
+- sng.bayes.accuracy: PCD from BLM
+
+- bsim.value: the expected outcome under the treatment regime using BSIM
+
+- sng.bayes.value: the expected outcome under the treatment regime using BLM
+
+- opt.value: the expected outcome under the treatment regime using true value of parameters in for the data generation
+
+```{r}
+#myVars <- c("bsim.deviance","bsim.accuracy","sng.bayes.deviance","sng.bayes.accuracy",
+#"bsim.value","sng.bayes.value","opt.value")
+#paste(" ",paste(myVars, collapse=" + "), sep=" ~ ")
+
+table1(~ bsim.deviance +  sng.bayes.deviance + 
+         bsim.accuracy + sng.bayes.accuracy + bsim.value + 
+         sng.bayes.value + opt.value| scenario,data=results,
+       overall=FALSE,transpose=TRUE,topclass="Rtable1-zebra")
+```
+
+
+# Deviance
+
+```{r}
+m_dev <- results %>% 
+  group_by(replicate) %>% 
+  dplyr::summarise(mean_dev_bsim=mean(bsim.deviance), mean_dev_sng=mean(sng.bayes.deviance),
+                   sd_dev_bsim=sd(bsim.deviance), sd_dev_sng=sd(sng.bayes.deviance)) 
+
+l_dev <- reshape2::melt(m_dev,id=c("replicate"))
+sd <- l_dev %>% subset(variable %in% c("sd_dev_sng","sd_dev_bsim"))
+colnames(sd) <- c("replicate","variable_sd","value_sd")
+mean_dev <- l_dev %>% subset(variable %in% c("mean_dev_bsim","mean_dev_sng"))
+plot_dev <- cbind(mean_dev,sd[,-1])
+
+plot_dev$replicate <- as.factor(plot_dev$replicate)
+
+ggplot(plot_dev, aes(x=replicate, y=value, color=variable)) + 
+  geom_point()+
+  geom_errorbar(aes(ymin=value - value_sd, ymax=value + value_sd), width=.2,
+                position=position_dodge())+ 
+  labs(title="Mean (+- standard deviation) of deviance based on 100 simulations",
+        y = "Deviance", x= "Scenario")+ theme(legend.position="bottom")+
+  scale_color_discrete(name = "Model", labels = c("BSIM", "BLM"))
+
+```
+
+```{r}
+dev <- results[,c("replicate","bsim.deviance","sng.bayes.deviance")]
+
+dev <- reshape2::melt(dev,id=c("replicate"))
+dev$replicate <- as.factor(dev$replicate)
+ggplot(dev, aes(x=replicate, y=value,fill=variable)) +
+  geom_boxplot(outlier.size=0.5)+ 
+  labs(title="Boxplot of deviance based on 100 simulations",
+        y = "Deviance", x= "Scenario")+ theme(legend.position="bottom")+
+  scale_fill_discrete(name = "Model", labels = c("BSIM", "BLM"))
+```
+
+# The expected outcome under the treatment regime
+
+Different from  the stan model(in iImulation_BSIMML_stan.html), the optimal treatment decision rule depends on the contrast:$\Delta = \beta_0+\boldsymbol{X_i}^\top\boldsymbol{\beta}$. 
+
+```{r}
+m_e_y <- results %>% 
+  group_by(replicate) %>% 
+  dplyr::summarise(mean_y_bsim=mean(bsim.value), mean_y_sng=mean(sng.bayes.value),
+                   mean_y_optim = mean(opt.value),
+                   sd_y_bsim=sd(bsim.value), sd_y_sng=sd(sng.bayes.value),
+                  sd_y_optim = sd(opt.value), ) 
+
+l_y <- reshape2::melt(m_e_y,id=c("replicate"))
+sd <- l_y %>% subset(variable %in% c("sd_y_sng","sd_y_bsim","sd_y_optim"))
+colnames(sd) <- c("replicate","variable_sd","value_sd")
+mean_y <- l_y %>% subset(variable %in% c("mean_y_bsim","mean_y_sng","mean_y_optim"))
+plot_y <- cbind(mean_y,sd[,-1])
+
+plot_y$replicate <- as.factor(plot_y$replicate)
+
+ggplot(plot_y, aes(x=replicate, y=value, color=variable)) + 
+  geom_point()+
+  geom_errorbar(aes(ymin=value - value_sd, ymax=value + value_sd), width=.2,
+                position=position_dodge())+ 
+  labs(title="Mean (+- SD) of the expected outcome under the treatment regime",
+        y = "The expected outcome under the treatment regime", x= "Scenario")+ theme(legend.position="bottom")+
+  scale_color_discrete(name = "Model", labels = c("BSIM", "BLM","True optimal value using true value of parameters"))
+
+```
+
+```{r}
+e_y <- results[,c("replicate","bsim.value","sng.bayes.value","opt.value")]
+
+e_y <- reshape2::melt(e_y,id=c("replicate"))
+e_y$replicate <- as.factor(e_y$replicate)
+ggplot(e_y, aes(x=replicate, y=value,fill=variable)) +
+  geom_boxplot(outlier.size=0.5)+ 
+  labs(title="Boxplot of the expected outcome under the treatment regime",
+        y = "The expected outcome under the treatment regime", x= "Scenario")+ theme(legend.position="bottom")+
+  scale_fill_discrete(name = "Model", labels = c("BSIM", "BLM","True optimal value using true value of parameters"))
+```
+
+
+# PCD
+
+```{r}
+m_pcd <- results %>% 
+  group_by(replicate) %>% 
+  dplyr::summarise(mean_pcd_bsim=mean(bsim.accuracy), mean_pcd_sng=mean(sng.bayes.accuracy),
+                   sd_pcd_bsim=sd(bsim.accuracy), sd_pcd_sng=sd(sng.bayes.accuracy)) 
+
+l_pcd <- reshape2::melt(m_pcd,id=c("replicate"))
+sd <- l_pcd %>% subset(variable %in% c("sd_pcd_sng","sd_pcd_bsim"))
+colnames(sd) <- c("replicate","variable_sd","value_sd")
+mean_pcd <- l_pcd %>% subset(variable %in% c("mean_pcd_bsim","mean_pcd_sng"))
+plot_pcd <- cbind(mean_pcd,sd[,-1])
+
+plot_pcd$replicate <- as.factor(plot_pcd$replicate)
+
+ggplot(plot_pcd, aes(x=replicate, y=value, color=variable)) + 
+  geom_point()+
+  geom_errorbar(aes(ymin=value - value_sd, ymax=value + value_sd), width=.2,
+                position=position_dodge())+ 
+  labs(title="Mean (+- SD) of PCD based on 100 simulations",
+        y = "PCD", x= "Scenario")+ theme(legend.position="bottom")+
+  scale_color_discrete(name = "Model", labels = c("BSIM", "BLM"))
+
+```
+
+```{r}
+pcd <- results[,c("replicate","bsim.accuracy","sng.bayes.accuracy")]
+
+pcd <- reshape2::melt(pcd,id=c("replicate"))
+pcd$replicate <- as.factor(pcd$replicate)
+ggplot(pcd, aes(x=replicate, y=value,fill=variable)) +
+  geom_boxplot(outlier.size=0.5)+ 
+  labs(title="Boxplot of PCD based on 100 simulations",
+        y = "PCD", x= "Scenario")+ theme(legend.position="bottom")+
+  scale_fill_discrete(name = "Model", labels = c("BSIM", "BLM"))
+```
